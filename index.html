@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>拍魔方，教你还原</title>
+<style>
+:root{--ink:#20242c;--teal:#0b6e6e;--line:#d8dde4}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.55 -apple-system,"PingFang SC","Hiragino Sans GB",sans-serif;color:var(--ink);background:#f4f6f8}
+main{max-width:520px;margin:0 auto;padding:14px 14px 96px}
+h1{font-size:23px;color:var(--teal);margin:6px 0 8px}h2{font-size:19px;margin:4px 0 6px}
+p{margin:6px 0}.muted{color:#5b6472;font-size:14px}
+button,.btn{display:block;width:100%;border:0;border-radius:12px;background:var(--teal);color:#fff;font:600 17px/1 inherit;padding:15px;margin:9px 0;text-align:center;cursor:pointer}
+button.alt,.btn.alt{background:#fff;color:var(--teal);border:1.5px solid var(--teal)}
+button:disabled{opacity:.4}
+.cam{position:relative;width:100%;aspect-ratio:1;background:#111;border-radius:14px;overflow:hidden}
+.cam video,.cam canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.guide{position:absolute;inset:7%;display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);pointer-events:none}
+.guide i{border:2px solid rgba(255,255,255,.9);box-shadow:0 0 0 1px rgba(0,0,0,.35)}
+.grid{display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);gap:4px;width:210px;margin:10px auto}
+.cell{aspect-ratio:1;border:1.5px solid var(--ink);border-radius:7px;padding:0;margin:0}
+.dots{display:flex;gap:6px;justify-content:center;margin:6px 0}.dots b{width:26px;height:8px;border-radius:4px;background:#d3d8df}.dots b.on{background:var(--teal)}
+.net{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0}
+.mini{display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);gap:2px}
+.mini button,.mini span{aspect-ratio:1;border:1px solid var(--ink);border-radius:3px;margin:0;padding:0;display:block;width:auto}
+.err{background:#ffecec;border-left:4px solid #c41e3a;padding:9px 11px;border-radius:6px;margin:8px 0}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px;margin:10px 0}
+.alg{font:700 21px/1.45 Menlo,monospace;color:#0b5a5a;background:#e9f3f3;border-radius:10px;padding:9px 11px;word-spacing:3px;margin:8px 0}
+.alg .now{background:var(--teal);color:#fff;border-radius:5px;padding:0 4px}
+.bar{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);padding:9px 14px calc(9px + env(safe-area-inset-bottom))}
+.bar>div{max-width:520px;margin:0 auto;display:flex;gap:9px}.bar button{margin:0}
+.hide{display:none}
+</style></head><body><main id="app"></main>
+<input id="file" class="hide" type="file" accept="image/*" capture="environment">
+<script src="cube.js"></script><script src="scan.js"></script><script>
+"use strict";
+const HEX={U:"#FFD500",D:"#FFFFFF",F:"#009E60",B:"#0051BA",R:"#FF5800",L:"#C41E3A"};
+const ORDER=["U","F","R","B","L","D"];
+const HOW={U:["黄色","黄色中心对着镜头，<b>绿色中心朝下</b>（朝向你）"],
+F:["绿色","绿色中心对着镜头，<b>黄色朝上</b>"],
+R:["橙色","橙色中心对着镜头，<b>黄色朝上</b>"],
+B:["蓝色","蓝色中心对着镜头，<b>黄色朝上</b>"],
+L:["红色","红色中心对着镜头，<b>黄色朝上</b>"],
+D:["白色","白色中心对着镜头，<b>绿色朝上</b>"]};
+const MOVE_CN={R:"右面",L:"左面",U:"上面",D:"下面",F:"前面",B:"后面"};
+const app=document.getElementById("app"),file=document.getElementById("file");
+const faces={},rgbs={},edited={};let idx=0,stream=null,result=null,seg=0,pos=0;
+
+function stop(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}}
+function intro(){app.innerHTML=`<h1>拍魔方，教你还原</h1>
+<p>依次拍魔方的 6 个面，确认颜色后，这里会一步步告诉你怎么转。</p>
+<div class="card"><b>拍之前</b><p>· 光线要亮，尽量不要有反光。<br>· 拍的过程中<b>不要转动魔方的任何一层</b>，只能整个拿着换面。<br>· 让魔方占满白色格子。</p></div>
+<p class="muted">这里按标准配色：黄对白、绿对蓝、橙对红。方法和《魔方还原图解指南》相同。</p>
+<button id="go">开始拍照</button>`;
+document.getElementById("go").onclick=()=>shoot(0)}
+
+function dots(){return `<div class="dots">${ORDER.map((_,i)=>`<b class="${i<=idx?"on":""}"></b>`).join("")}</div>`}
+async function shoot(i){idx=i;stop();const f=ORDER[idx];
+app.innerHTML=`${dots()}<h2>第 ${idx+1}/6 面：${HOW[f][0]}</h2><p>${HOW[f][1]}</p>
+<div class="cam" id="cam"><video playsinline autoplay muted></video><div class="guide">${"<i></i>".repeat(9)}</div></div>
+<div id="e"></div><button id="snap">拍这一面</button><button class="alt" id="pick">用手机相机拍</button>
+${idx?'<button class="alt" id="back">上一面</button>':""}`;
+document.getElementById("pick").onclick=()=>file.click();
+if(idx)document.getElementById("back").onclick=()=>shoot(idx-1);
+const v=app.querySelector("video"),snap=document.getElementById("snap");
+const live=()=>document.contains(v);
+try{const got=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:"environment"},width:{ideal:1280}}});
+if(!live()){got.getTracks().forEach(t=>t.stop());return}
+stream=got;v.srcObject=stream;await v.play();snap.onclick=()=>{if(!v.videoWidth)return;grab(v,v.videoWidth,v.videoHeight)}}
+catch(e){if(!live())return;snap.classList.add("hide");document.getElementById("cam").classList.add("hide");
+document.getElementById("e").innerHTML='<p class="muted">网页里开不了摄像头，请点下面按钮用手机相机拍。把魔方这一面拍在照片正中间，并占满画面。</p>'}}
+
+function grab(src,w,h){const s=Math.min(w,h),c=document.createElement("canvas");c.width=c.height=360;
+const g=c.getContext("2d",{willReadFrequently:true});g.drawImage(src,(w-s)/2,(h-s)/2,s,s,0,0,360,360);
+const f=ORDER[idx],m=360*.07,cell=(360-2*m)/3,px=[];
+for(let r=0;r<3;r++)for(let q=0;q<3;q++){const x=m+q*cell+cell*.3,y=m+r*cell+cell*.3,d=g.getImageData(x,y,cell*.4,cell*.4).data,a=[[],[],[]];
+for(let i=0;i<d.length;i+=4)for(let k=0;k<3;k++)a[k].push(d[i+k]);
+px.push(a.map(l=>l.sort((p,o)=>p-o)[l.length>>1]))}
+rgbs[f]=px;faces[f]=px.map((p,i)=>i===4?f:CubeScan.guess(...p));
+for(let i=0;i<9;i++)delete edited[f+i];stop();confirmFace()}
+
+file.onchange=()=>{const u=file.files[0];if(!u)return;const im=new Image();im.onload=()=>{grab(im,im.naturalWidth,im.naturalHeight);URL.revokeObjectURL(im.src);file.value=""};im.src=URL.createObjectURL(u)};
+
+function cycle(f,i,el){if(i===4)return;const o="UDFBRL",c=o[(o.indexOf(faces[f][i])+1)%6];faces[f][i]=c;edited[f+i]=true;el.style.background=HEX[c]}
+function confirmFace(){const f=ORDER[idx];
+app.innerHTML=`${dots()}<h2>${HOW[f][0]}这一面认对了吗？</h2><p class="muted">颜色不对就点那一格，会换下一种颜色。</p>
+<div class="grid">${faces[f].map((c,i)=>`<button class="cell" data-i="${i}" style="background:${HEX[c]}"></button>`).join("")}</div>
+<button id="ok">${idx<5?"对，拍下一面":"对，全部拍完了"}</button><button class="alt" id="re">重拍这一面</button>`;
+app.querySelectorAll(".cell").forEach(b=>b.onclick=()=>cycle(f,+b.dataset.i,b));
+document.getElementById("re").onclick=()=>shoot(idx);
+document.getElementById("ok").onclick=()=>idx<5?shoot(idx+1):review(true)}
+
+function review(first){if(first)Object.assign(faces,CubeScan.refine(rgbs,faces,edited));
+const row=ORDER.map(f=>`<div><div class="muted">${HOW[f][0]}</div><div class="mini">${faces[f].map((c,i)=>`<button data-f="${f}" data-i="${i}" style="background:${HEX[c]}"></button>`).join("")}</div></div>`).join("");
+const c=CubeScan.counts(faces),bad=Object.keys(c).filter(k=>c[k]!==9);
+app.innerHTML=`<h2>最后核对六个面</h2><p class="muted">用全部照片重新校准过颜色。不对就点那一格修改，每种颜色要正好 9 格。</p>
+<div class="net" style="grid-template-columns:repeat(3,1fr)">${row}</div><div id="e">${bad.length?`<div class="err">现在 ${bad.map(k=>HOW[k][0]+" "+c[k]+" 格").join("，")}。</div>`:""}</div>
+<button id="sol" ${bad.length?"disabled":""}>生成还原步骤</button><button class="alt" id="again">全部重拍</button>`;
+app.querySelectorAll(".mini button").forEach(b=>b.onclick=()=>{const {f,i}=b.dataset;if(+i===4)return;cycle(f,+i,b);review(false)});
+document.getElementById("again").onclick=()=>shoot(0);
+document.getElementById("sol").onclick=()=>{try{result=CubeScan.solveFaces(faces);seg=0;pos=0;step()}
+catch(e){document.getElementById("e").innerHTML=`<div class="err">这组颜色拼不成真魔方：${e.message}。最常见的是橙和红、黄和白认错了，请对照实物修改。</div>`}}}
+
+const STAGE={"1a":"第 1 步 小雏菊","1b":"第 1 步 白十字","2":"第 2 步 白色角块","3":"第 3 步 第二层","4":"第 4 步 黄十字","5":"第 5 步 棱块对齐","6":"第 6 步 角块归位","7":"第 7 步 翻转角块"};
+function pretty(t){return t.replace("'","′")}
+function explain(t){if(!t)return"";const n=t[0];
+if(n==="y")return t==="y2"?"整个魔方转半圈（顶面不变）":`整个魔方水平转 90°：${t==="y"?"右面转到前面":"左面转到前面"}`;
+return `${MOVE_CN[n]}${t.endsWith("2")?"转半圈":t.endsWith("'")?"逆时针转 90°":"顺时针转 90°"}`}
+function stateNow(){let s=result.state;for(let i=0;i<seg;i++)s=CubeLib.apply(s,result.segs[i].tokens);return CubeLib.apply(s,result.segs[seg].tokens.slice(0,pos))}
+function mini(s,f){return `<div class="mini">${CubeScan.GRID[f].map(p=>`<span style="background:${HEX[CubeLib.colorAt(s,f,p)]}"></span>`).join("")}</div>`}
+function step(){const g=result.segs[seg],t=g.tokens,s=stateNow();
+app.innerHTML=`<div class="muted">第 ${seg+1}/${result.segs.length} 段 · ${STAGE[g.stage]}</div>
+<div class="card"><p>${g.text}</p><div class="alg">${t.map((x,i)=>`<span class="${i===pos?"now":""}">${pretty(x)}</span>`).join(" ")}</div>
+<p><b>现在这一下：</b>${pos<t.length?`${pretty(t[pos])}，${explain(t[pos])}`:"这段做完了"}</p></div>
+<div class="muted">你的魔方现在应该是这样（按当前拿法看）：</div>
+<div class="net" style="grid-template-columns:repeat(3,1fr)">${["U","F","R"].map(f=>`<div><div class="muted">${{U:"上",F:"前",R:"右"}[f]}</div>${mini(s,f)}</div>`).join("")}</div>
+<p class="muted">字母不带符号是顺时针，带 ′ 是逆时针，带 2 是转半圈。顺时针指正对那一面看。</p>`;
+let bar=document.getElementById("bar");if(!bar){bar=document.createElement("div");bar.id="bar";bar.className="bar";document.body.append(bar)}
+bar.innerHTML=`<div><button class="alt" id="pv">上一下</button><button id="nx">${pos<t.length?"做完这一下":seg+1<result.segs.length?"下一段":"完成"}</button></div>`;
+document.getElementById("pv").onclick=()=>{if(pos>0)pos--;else if(seg>0){seg--;pos=result.segs[seg].tokens.length}step()};
+document.getElementById("nx").onclick=()=>{if(pos<t.length)pos++;else if(seg+1<result.segs.length){seg++;pos=0}else{bar.remove();app.innerHTML='<h1>还原完成！</h1><p>你的魔方六面都对齐了。</p><button onclick="location.reload()">再来一次</button>';return}step();scrollTo(0,0)}}
+intro();
+</script></body></html>
